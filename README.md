@@ -78,6 +78,11 @@ curl -X POST http://127.0.0.1:8000/applications \
 | DELETE | `/applications/{id}` | delete application |
 | GET | `/stats/summary` | counts by status and direction |
 
+## Project Growth
+
+- [Roadmap](ROADMAP.md) - staged feature plan for making the API production-like.
+- [Feature backlog](docs/FEATURE_BACKLOG.md) - issue-ready tasks with acceptance criteria.
+
 ## Portfolio Demo Script
 
 1. Start the API.
