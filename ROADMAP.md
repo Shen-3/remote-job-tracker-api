@@ -11,6 +11,14 @@ Show that the project is not a stub:
 - it has persistence, auth, analytics, and export/import features;
 - it can be deployed and extended without rewriting the core.
 
+## Current Progress
+
+- Milestone 1 is implemented: workflow transitions, follow-up dates, priority/source fields, filters, and tests.
+- Milestone 2 is implemented for local usage: users, password hashing, JWT login, `/me`, and user-scoped applications.
+- Milestone 3 is partially implemented: summary, funnel, weekly, and source response-rate endpoints.
+- Milestone 4 is partially implemented: CSV export/import with duplicate detection and validation reports.
+- Milestone 5 is partially implemented: Docker Compose, database health check, Ruff, and GitHub Actions CI.
+
 ## Milestone 1: Strong CRUD and Workflow
 
 Goal: make the application tracker useful for a real job search.

@@ -1,0 +1,13 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      JOBTRACKER_DB: /data/job_tracker.sqlite3
+      JOBTRACKER_SECRET_KEY: change-me-in-production-minimum-32-bytes
+    volumes:
+      - jobtracker-data:/data
+
+volumes:
+  jobtracker-data:
