@@ -95,6 +95,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
         current_user=Depends(get_current_user),
         db=Depends(get_db),
     ) -> dict[str, Any]:
+        if payload.status != Status.planned:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="new applications must start with planned status",
+            )
         return repository.create_application(
             db,
             current_user["id"],
@@ -228,7 +233,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
         db=Depends(get_db),
     ) -> dict[str, Any]:
         raw_content = await file.read()
-        reader = csv.DictReader(StringIO(raw_content.decode("utf-8-sig")))
+        try:
+            decoded_content = raw_content.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="csv file must be encoded as UTF-8",
+            ) from exc
+
+        reader = csv.DictReader(StringIO(decoded_content))
         errors: list[dict[str, Any]] = []
         imported = 0
         skipped_duplicates = 0
@@ -241,6 +254,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 payload = ApplicationCreate.model_validate(_csv_payload(row))
             except ValidationError as exc:
                 errors.append({"row": row_number, "error": _validation_error(exc)})
+                continue
+
+            if payload.status != Status.planned:
+                errors.append(
+                    {"row": row_number, "error": "status: new applications must start with planned status"}
+                )
                 continue
 
             data = payload.model_dump(mode="json")
