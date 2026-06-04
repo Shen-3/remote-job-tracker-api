@@ -53,6 +53,39 @@ def payload(
     }
 
 
+def create_application(client: TestClient, headers: dict[str, str], **kwargs) -> dict:
+    response = client.post("/applications", json=payload(**kwargs), headers=headers)
+    assert response.status_code == 201
+    return response.json()
+
+
+def advance_status(
+    client: TestClient,
+    headers: dict[str, str],
+    application_id: int,
+    target_status: str,
+) -> dict:
+    paths = {
+        "planned": [],
+        "applied": ["applied"],
+        "recruiter_reply": ["applied", "recruiter_reply"],
+        "test_task": ["applied", "recruiter_reply", "test_task"],
+        "interview": ["applied", "recruiter_reply", "interview"],
+        "offer": ["applied", "recruiter_reply", "interview", "offer"],
+        "rejected": ["applied", "rejected"],
+    }
+    result = client.get(f"/applications/{application_id}", headers=headers).json()
+    for status in paths[target_status]:
+        response = client.patch(
+            f"/applications/{application_id}",
+            json={"status": status},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        result = response.json()
+    return result
+
+
 def test_health(tmp_path):
     client = make_client(tmp_path)
     assert client.get("/health").json() == {"status": "ok", "database": "ok"}
@@ -84,7 +117,7 @@ def test_anonymous_users_cannot_read_applications(tmp_path):
 def test_create_and_get_application(tmp_path):
     client = make_client(tmp_path)
     headers = auth_headers(client)
-    created = client.post("/applications", json=payload(), headers=headers).json()
+    created = create_application(client, headers)
     assert created["id"] == 1
     assert created["company"] == "T-Bank"
     assert created["priority"] == "medium"
@@ -95,11 +128,21 @@ def test_create_and_get_application(tmp_path):
     assert response.json()["role"] == "QA Automation Intern"
 
 
+def test_create_application_requires_planned_status(tmp_path):
+    client = make_client(tmp_path)
+    headers = auth_headers(client)
+
+    response = client.post("/applications", json=payload(status="offer"), headers=headers)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "new applications must start with planned status"
+
+
 def test_user_cannot_access_another_users_applications(tmp_path):
     client = make_client(tmp_path)
     user_a_headers = auth_headers(client, email="a@example.com")
     user_b_headers = auth_headers(client, email="b@example.com")
-    created = client.post("/applications", json=payload(), headers=user_a_headers).json()
+    created = create_application(client, user_a_headers)
 
     assert client.get("/applications", headers=user_b_headers).json() == []
     assert client.get(f"/applications/{created['id']}", headers=user_b_headers).status_code == 404
@@ -117,16 +160,8 @@ def test_user_cannot_access_another_users_applications(tmp_path):
 def test_filter_by_status_direction_priority_and_source(tmp_path):
     client = make_client(tmp_path)
     headers = auth_headers(client)
-    client.post(
-        "/applications",
-        json=payload("T-Bank", "qa_automation", priority="high", source="tbank"),
-        headers=headers,
-    )
-    client.post(
-        "/applications",
-        json=payload("Yandex", "python_backend", priority="low", source="yandex"),
-        headers=headers,
-    )
+    create_application(client, headers, company="T-Bank", direction="qa_automation", priority="high", source="tbank")
+    create_application(client, headers, company="Yandex", direction="python_backend", priority="low", source="yandex")
 
     qa_items = client.get("/applications?direction=qa_automation", headers=headers).json()
     assert len(qa_items) == 1
@@ -147,7 +182,7 @@ def test_filter_by_status_direction_priority_and_source(tmp_path):
 def test_update_application_status(tmp_path):
     client = make_client(tmp_path)
     headers = auth_headers(client)
-    created = client.post("/applications", json=payload(), headers=headers).json()
+    created = create_application(client, headers)
 
     applied = client.patch(
         f"/applications/{created['id']}",
@@ -172,10 +207,38 @@ def test_update_application_status(tmp_path):
     assert "Friday" in response.json()["notes"]
 
 
+def test_update_application_can_clear_nullable_fields(tmp_path):
+    client = make_client(tmp_path)
+    headers = auth_headers(client)
+    created = create_application(client, headers, next_action_at="2026-07-01")
+
+    response = client.patch(
+        f"/applications/{created['id']}",
+        json={
+            "link": None,
+            "salary": None,
+            "hours_per_week": None,
+            "deadline": None,
+            "next_action_at": None,
+            "notes": None,
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["link"] is None
+    assert body["salary"] is None
+    assert body["hours_per_week"] is None
+    assert body["deadline"] is None
+    assert body["next_action_at"] is None
+    assert body["notes"] is None
+
+
 def test_invalid_status_transition_returns_400(tmp_path):
     client = make_client(tmp_path)
     headers = auth_headers(client)
-    created = client.post("/applications", json=payload(), headers=headers).json()
+    created = create_application(client, headers)
 
     response = client.patch(f"/applications/{created['id']}", json={"status": "offer"}, headers=headers)
 
@@ -198,17 +261,10 @@ def test_invalid_dates_return_422(tmp_path):
 def test_follow_ups_return_due_active_applications(tmp_path):
     client = make_client(tmp_path)
     headers = auth_headers(client)
-    client.post("/applications", json=payload("Due Corp", next_action_at="2000-01-01"), headers=headers)
-    client.post(
-        "/applications",
-        json=payload("Future Corp", next_action_at="2999-01-01"),
-        headers=headers,
-    )
-    client.post(
-        "/applications",
-        json=payload("Rejected Corp", next_action_at="2000-01-02", status="rejected"),
-        headers=headers,
-    )
+    create_application(client, headers, company="Due Corp", next_action_at="2000-01-01")
+    create_application(client, headers, company="Future Corp", next_action_at="2999-01-01")
+    rejected = create_application(client, headers, company="Rejected Corp", next_action_at="2000-01-02")
+    advance_status(client, headers, rejected["id"], "rejected")
 
     response = client.get("/applications/follow-ups", headers=headers)
 
@@ -219,7 +275,7 @@ def test_follow_ups_return_due_active_applications(tmp_path):
 def test_delete_application(tmp_path):
     client = make_client(tmp_path)
     headers = auth_headers(client)
-    created = client.post("/applications", json=payload(), headers=headers).json()
+    created = create_application(client, headers)
 
     assert client.delete(f"/applications/{created['id']}", headers=headers).status_code == 204
     assert client.get(f"/applications/{created['id']}", headers=headers).status_code == 404
@@ -228,8 +284,8 @@ def test_delete_application(tmp_path):
 def test_summary_counts(tmp_path):
     client = make_client(tmp_path)
     headers = auth_headers(client)
-    client.post("/applications", json=payload("T-Bank", "qa_automation"), headers=headers)
-    client.post("/applications", json=payload("Yandex", "python_backend"), headers=headers)
+    create_application(client, headers, company="T-Bank", direction="qa_automation")
+    create_application(client, headers, company="Yandex", direction="python_backend")
 
     summary = client.get("/stats/summary", headers=headers).json()
     assert summary["total"] == 2
@@ -240,24 +296,18 @@ def test_summary_counts(tmp_path):
 def test_funnel_weekly_and_source_stats(tmp_path):
     client = make_client(tmp_path)
     headers = auth_headers(client)
-    client.post("/applications", json=payload("Applied", status="applied", source="hh"), headers=headers)
-    client.post(
-        "/applications",
-        json=payload("Reply", status="recruiter_reply", source="hh"),
-        headers=headers,
-    )
-    client.post(
-        "/applications",
-        json=payload("Task", status="test_task", source="tbank"),
-        headers=headers,
-    )
-    client.post(
-        "/applications",
-        json=payload("Interview", status="interview", source="tbank"),
-        headers=headers,
-    )
-    client.post("/applications", json=payload("Offer", status="offer", source="yandex"), headers=headers)
-    client.post("/applications", json=payload("Planned", status="planned", source="direct"), headers=headers)
+    applied = create_application(client, headers, company="Applied", source="hh")
+    reply = create_application(client, headers, company="Reply", source="hh")
+    task = create_application(client, headers, company="Task", source="tbank")
+    interview = create_application(client, headers, company="Interview", source="tbank")
+    offer = create_application(client, headers, company="Offer", source="yandex")
+    create_application(client, headers, company="Planned", source="direct")
+
+    advance_status(client, headers, applied["id"], "applied")
+    advance_status(client, headers, reply["id"], "recruiter_reply")
+    advance_status(client, headers, task["id"], "test_task")
+    advance_status(client, headers, interview["id"], "interview")
+    advance_status(client, headers, offer["id"], "offer")
 
     funnel = client.get("/stats/funnel", headers=headers).json()
     weekly = client.get("/stats/weekly", headers=headers).json()
@@ -304,3 +354,17 @@ def test_csv_import_export_and_duplicates(tmp_path):
     assert second_import.json()["skipped_duplicates"] == 1
     assert exported.status_code == 200
     assert "CSV Corp" in exported.text
+
+
+def test_csv_import_rejects_non_utf8_file(tmp_path):
+    client = make_client(tmp_path)
+    headers = auth_headers(client)
+
+    response = client.post(
+        "/imports/applications.csv",
+        headers=headers,
+        files={"file": ("applications.csv", b"\xff\xfe\xfd", "text/csv")},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "csv file must be encoded as UTF-8"
